@@ -7,7 +7,7 @@
   'use strict';
   try {
     const { EditorView, Decoration, keymap } = MarkEdit.codemirror.view;
-    const { StateField } = MarkEdit.codemirror.state;
+    const { StateField, Transaction } = MarkEdit.codemirror.state;
 
     // ── CSS ───────────────────────────────────────────────────────────────────
     // Static mode (default): background-size 100%, gradient spans each span's
@@ -327,6 +327,7 @@
         changes: finalDi === -1
           ? { from: finalText.length, insert: newBlock }
           : { from: finalDi, to: finalText.length, insert: newBlock },
+        annotations: Transaction.addToHistory.of(false),
       });
     }
 
@@ -393,9 +394,18 @@
         }
 
         // Content-only edit → map decorations, then shrink to exclude insertions
-        // (unless suppressed during paste-as-AI operations)
+        // (unless suppressed during paste-as-AI or undo/redo operations).
+        // Undo/redo should restore previous state without carving out ranges —
+        // re-inserted text from undo was originally AI and should stay AI.
         const mapped = decos.map(tr.changes);
-        if (suppressSplit) return { decos: mapped, annoBlock };
+        const isUndoRedo = tr.isUserEvent('undo') || tr.isUserEvent('redo');
+        if (suppressSplit || isUndoRedo) {
+          // Still sync annotation block offsets after undo/redo
+          if (isUndoRedo && hasDecos && editorView) {
+            scheduleAnnotationSync(editorView);
+          }
+          return { decos: mapped, annoBlock };
+        }
         const insertions = getInsertionPoints(tr);
         const shrunk = shrinkDecoRanges(mapped, insertions);
 

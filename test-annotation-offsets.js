@@ -518,6 +518,144 @@ console.log('\n=== Test Scenario 10: Real-world editing flow (blog post simulati
   console.log('  Scenario 10 complete.');
 }
 
+console.log('\n=== Test Scenario 11: Undo insert (Cmd+Z after typing) ===');
+{
+  // AI range: "world from AI" at graphemes 6-18
+  let doc = buildDoc('Hello world from AI', [{ loc: 6, len: 13 }]);
+  assertAIText(doc, ['world from AI'], 'initial');
+
+  // User types "X" at position 0 (before AI)
+  let docAfterType = simulateInsert(doc, 0, 'X');
+  assertAIText(docAfterType, ['world from AI'], 'after typing X');
+
+  // Undo the insert = delete the "X" at position 0
+  let docAfterUndo = simulateDelete(docAfterType, 0, 1);
+  assertAIText(docAfterUndo, ['world from AI'], 'after undo — AI text fully preserved');
+
+  console.log('  Scenario 11 complete.');
+}
+
+console.log('\n=== Test Scenario 12: Undo should NOT shrink re-inserted AI text ===');
+{
+  // This tests the core undo bug: when undoing a deletion of AI text,
+  // the re-inserted text should remain AI, not be carved out as human.
+  //
+  // Scenario: user deletes a character from inside AI text, then undoes.
+  // The undo re-inserts the character. Without the fix, shrinkDecoRanges
+  // would treat this as human-typed text and carve it out.
+
+  let doc = buildDoc('Hello world from AI end', [{ loc: 6, len: 13 }]);
+  assertAIText(doc, ['world from AI'], 'initial');
+
+  // Simulate: user deletes "d" from "world" (position 10, inside AI range)
+  let docAfterDel = simulateDelete(doc, 10, 11);
+  // AI text is now "worl from AI" (the "d" was removed)
+  assertAIText(docAfterDel, ['worl from AI'], 'after deleting "d" from AI text');
+
+  // Now simulate undo: re-insert "d" at position 10.
+  // In the FIXED code, undo skips shrinkDecoRanges, so the "d" stays AI.
+  // We simulate this by inserting WITHOUT shrinking (undo behavior).
+  const { content: cDel, block: bDel } = splitDoc(docAfterDel);
+  const { ai: aiDel } = parseBlock(bDel);
+  const gmapDel = buildGMap(cDel);
+  const maxGDel = gmapDel.length - 1;
+
+  // Get current deco ranges (code unit)
+  const decoRanges = [];
+  for (const { loc, len } of aiDel) {
+    if (loc < 0 || loc >= maxGDel) continue;
+    const from = gmapDel[loc];
+    const to = gmapDel[Math.min(loc + len, maxGDel)];
+    if (from < to) decoRanges.push({ from, to });
+  }
+
+  // Simulate CM6 map for undo re-insert of "d" at position 10 (NO shrink)
+  const undoInsertPos = 10;
+  const undoInsertText = 'd';
+  const mappedRanges = decoRanges.map(r => {
+    let from = r.from, to = r.to;
+    if (undoInsertPos <= from) {
+      from += undoInsertText.length;
+      to += undoInsertText.length;
+    } else if (undoInsertPos > from && undoInsertPos < to) {
+      to += undoInsertText.length; // CM6 expands mark on interior insert
+    }
+    return { from, to };
+  });
+
+  // Rebuild content after undo
+  const newContent = cDel.slice(0, undoInsertPos) + undoInsertText + cDel.slice(undoInsertPos);
+
+  // Convert back to grapheme ranges (this is what the sync would do)
+  const newGmap = buildGMap(newContent);
+  const newAIRanges = [];
+  for (const r of mappedRanges) {
+    const gF = cuToGi(newGmap, r.from);
+    const gT = cuToGi(newGmap, r.to);
+    if (gF < gT) newAIRanges.push({ loc: gF, len: gT - gF });
+  }
+
+  const undoDoc = buildDoc(newContent, mergeRanges(newAIRanges));
+  // The "d" should be BACK in the AI text (no shrink on undo)
+  assertAIText(undoDoc, ['world from AI'], 'after undo — "d" restored as AI text, not carved out');
+
+  console.log('  Scenario 12 complete.');
+}
+
+console.log('\n=== Test Scenario 13: Undo preserves last character of AI text ===');
+{
+  // Reproduces the exact bug from the screenshot: last char "t" in "text"
+  // loses rainbow after Cmd+Z
+
+  const content = 'Optional shimmer animation on AI text';
+  let doc = buildDoc(content, [{ loc: 0, len: 37 }]);
+  assertAIText(doc, [content], 'initial — all AI');
+
+  // User types a character at the end
+  let docAfterType = simulateInsert(doc, 37, '!');
+  // The "!" is human (carved out), but all original text stays AI
+  assertAIText(docAfterType, [content], 'after typing "!" — original AI preserved');
+
+  // Undo the "!" insertion = delete it
+  let docAfterUndo = simulateDelete(docAfterType, 37, 38);
+  assertAIText(docAfterUndo, [content], 'after undo — all AI text including last "t" preserved');
+
+  // Now test: user types inside AI text, then undoes
+  let docMidType = simulateInsert(doc, 20, 'Z');
+  let docMidUndo = simulateDelete(docMidType, 20, 21);
+  assertAIText(docMidUndo, [content], 'after undo mid-text — full AI text preserved');
+
+  console.log('  Scenario 13 complete.');
+}
+
+console.log('\n=== Test Scenario 14: Annotation sync dispatch should not corrupt undo ===');
+{
+  // Verifies that annotation block rewrite (sync) produces correct ranges
+  // that, when parsed back, match the original AI text.
+  // This tests the roundtrip: type -> map decos -> sync writes annotation block
+  // -> parse annotation block -> verify AI text unchanged.
+
+  const content = 'Human prefix. AI generated content here. Human suffix.';
+  let doc = buildDoc(content, [{ loc: 14, len: 26 }]);
+  assertAIText(doc, ['AI generated content here.'], 'initial');
+
+  // Simulate typing before AI (3 times, as if rapidly)
+  doc = simulateInsert(doc, 0, 'A');
+  doc = simulateInsert(doc, 0, 'B');
+  doc = simulateInsert(doc, 0, 'C');
+  assertAIText(doc, ['AI generated content here.'], 'after 3 inserts before AI');
+
+  // Simulate undo all 3
+  doc = simulateDelete(doc, 0, 1); // undo C
+  assertAIText(doc, ['AI generated content here.'], 'after undo 1');
+  doc = simulateDelete(doc, 0, 1); // undo B
+  assertAIText(doc, ['AI generated content here.'], 'after undo 2');
+  doc = simulateDelete(doc, 0, 1); // undo A
+  assertAIText(doc, ['AI generated content here.'], 'after undo 3 — back to original');
+
+  console.log('  Scenario 14 complete.');
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────
 
 console.log(`\n${'='.repeat(60)}`);
