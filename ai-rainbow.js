@@ -7,7 +7,7 @@
   'use strict';
   try {
     const { EditorView, Decoration, keymap } = MarkEdit.codemirror.view;
-    const { StateField, Transaction } = MarkEdit.codemirror.state;
+    const { StateField } = MarkEdit.codemirror.state;
 
     // ── CSS ───────────────────────────────────────────────────────────────────
     // Static mode (default): background-size 100%, gradient spans each span's
@@ -229,9 +229,6 @@
     let splitPending = false;
     // Suppresses split logic during paste operations that will be marked as AI
     let suppressSplit = false;
-    // Debounced sync: keep annotation block offsets up-to-date even when typing
-    // outside AI ranges, so that a later rebuild doesn't use stale positions.
-    let syncTimer = null;
 
     function scheduleAnnotationSplit(view) {
       if (splitPending) return;
@@ -244,90 +241,42 @@
       }, 0);
     }
 
-    // Debounced annotation block sync for content-only edits (typing outside
-    // AI ranges). Keeps the stored grapheme offsets current so that any later
-    // full rebuild doesn't place decorations at stale positions.
-    function scheduleAnnotationSync(view) {
-      if (syncTimer !== null) clearTimeout(syncTimer);
-      syncTimer = setTimeout(() => {
-        syncTimer = null;
-        if (splitPending) return; // a split rewrite will handle it
-        try { rewriteAnnotationsFromDecos(view); } catch (e) {
-          console.error('[ai-rainbow] annotation sync error:', e);
-        }
-      }, 800);
-    }
-
     // Reads the current decoration ranges from the StateField and rewrites
     // the annotation block to match, so the split persists in the file.
     async function rewriteAnnotationsFromDecos(view) {
-      // Read decorations and convert to grapheme ranges
-      const snap1 = view.state.doc.toString();
-      const { content: c1, block: b1 } = splitDoc(snap1);
-      if (!b1) return;
+      const fullText = view.state.doc.toString();
+      const { content, block, di } = splitDoc(fullText);
+      if (!block) return;
 
-      const existing = parseBlock(b1);
-      const gmap1  = buildGMap(c1);
-      const totalG1 = gmap1.length - 1;
-      if (totalG1 <= 0) return;
+      const existing = parseBlock(block);
+      const gmap   = buildGMap(content);
+      const totalG = gmap.length - 1;
+      if (totalG <= 0) return;
 
+      // Read current decoration ranges from the field and convert to grapheme ranges
       const fieldVal = view.state.field(decoField);
       const aiRanges = [];
       const iter = fieldVal.decos.iter();
       while (iter.value) {
-        const gFrom = cuToGi(gmap1, iter.from);
-        const gTo   = cuToGi(gmap1, iter.to);
+        const gFrom = cuToGi(gmap, iter.from);
+        const gTo   = cuToGi(gmap, iter.to);
         if (gFrom < gTo) aiRanges.push({ loc: gFrom, len: gTo - gFrom });
         iter.next();
       }
 
       const merged = mergeRanges(aiRanges);
-      const hash   = await computeHash(c1);
-
-      // Re-read state after async gap — document may have changed
-      const fullText = view.state.doc.toString();
-      const { content, block, di } = splitDoc(fullText);
-      if (!block) return;
-
-      // If content changed during await, re-derive grapheme ranges from
-      // the current decorations against the current content
-      const gmap   = buildGMap(content);
-      const totalG = gmap.length - 1;
-      if (totalG <= 0) return;
-
-      let finalMerged = merged;
-      if (content !== c1) {
-        const curField = view.state.field(decoField);
-        const curRanges = [];
-        const it = curField.decos.iter();
-        while (it.value) {
-          const gF = cuToGi(gmap, it.from);
-          const gT = cuToGi(gmap, it.to);
-          if (gF < gT) curRanges.push({ loc: gF, len: gT - gF });
-          it.next();
-        }
-        finalMerged = mergeRanges(curRanges);
-      }
-
-      const curExisting = content !== c1 ? parseBlock(block) : existing;
-      const ranges = finalMerged.length ? finalMerged.map(r => `${r.loc},${r.len}`).join(' ') : '';
-      // Re-hash if content changed
-      const finalHash = content !== c1 ? await computeHash(content) : hash;
+      const hash   = await computeHash(content);
+      const ranges = merged.length ? merged.map(r => `${r.loc},${r.len}`).join(' ') : '';
       const newBlock = ranges
-        ? `\n---\nAnnotations: 0,${totalG} SHA-256 ${finalHash}\n&${curExisting.aiName}: ${ranges}\n...`
-        : `\n---\nAnnotations: 0,${totalG} SHA-256 ${finalHash}\n...`;
+        ? `\n---\nAnnotations: 0,${totalG} SHA-256 ${hash}\n&${existing.aiName}: ${ranges}\n...`
+        : `\n---\nAnnotations: 0,${totalG} SHA-256 ${hash}\n...`;
 
-      // Re-read one final time to get correct offsets for dispatch
-      const finalText = view.state.doc.toString();
-      const { di: finalDi } = splitDoc(finalText);
-
-      if (finalText.slice(finalDi) === newBlock) return; // no change needed
+      if (fullText.slice(di) === newBlock) return; // no change needed
 
       view.dispatch({
-        changes: finalDi === -1
-          ? { from: finalText.length, insert: newBlock }
-          : { from: finalDi, to: finalText.length, insert: newBlock },
-        annotations: Transaction.addToHistory.of(false),
+        changes: di === -1
+          ? { from: fullText.length, insert: newBlock }
+          : { from: di, to: fullText.length, insert: newBlock },
       });
     }
 
@@ -394,18 +343,9 @@
         }
 
         // Content-only edit → map decorations, then shrink to exclude insertions
-        // (unless suppressed during paste-as-AI or undo/redo operations).
-        // Undo/redo should restore previous state without carving out ranges —
-        // re-inserted text from undo was originally AI and should stay AI.
+        // (unless suppressed during paste-as-AI operations)
         const mapped = decos.map(tr.changes);
-        const isUndoRedo = tr.isUserEvent('undo') || tr.isUserEvent('redo');
-        if (suppressSplit || isUndoRedo) {
-          // Still sync annotation block offsets after undo/redo
-          if (isUndoRedo && hasDecos && editorView) {
-            scheduleAnnotationSync(editorView);
-          }
-          return { decos: mapped, annoBlock };
-        }
+        if (suppressSplit) return { decos: mapped, annoBlock };
         const insertions = getInsertionPoints(tr);
         const shrunk = shrinkDecoRanges(mapped, insertions);
 
@@ -422,12 +362,6 @@
           scheduleAnnotationSplit(editorView);
 
           return { decos: newDecos, annoBlock };
-        }
-
-        // Content changed but no split needed — schedule debounced sync to
-        // keep annotation block offsets current for persistence/rebuild.
-        if (hasDecos && editorView) {
-          scheduleAnnotationSync(editorView);
         }
 
         return { decos: mapped, annoBlock };
@@ -528,18 +462,13 @@
       const gmap   = buildGMap(content);
       const totalG = gmap.length - 1;
       const hash   = await computeHash(content);
-
-      // Re-read state after async gap — document may have changed
-      const curText = view.state.doc.toString();
-      const { di: curDi } = splitDoc(curText);
-
       const ranges = allAI.map(r => `${r.loc},${r.len}`).join(' ');
       const newBlock = `\n---\nAnnotations: 0,${totalG} SHA-256 ${hash}\n&${existing.aiName}: ${ranges}\n...`;
 
       view.dispatch({
-        changes: curDi === -1
-          ? { from: curText.length, insert: newBlock }
-          : { from: curDi, to: curText.length, insert: newBlock },
+        changes: di === -1
+          ? { from: fullText.length, insert: newBlock }
+          : { from: di, to: fullText.length, insert: newBlock },
       });
     }
 
