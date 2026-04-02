@@ -1,6 +1,6 @@
 // ai-rainbow.js — AI Authorship for MarkEdit
 // Version: 1.0.0
-// Features: animated rainbow text, paste detection, Cmd+Shift+V paste-as-AI, Cmd+Shift+A marking, composition stats
+// Features: animated rainbow text, Cmd+Shift+V paste-as-AI, Cmd+Shift+A marking, composition stats
 // Format: iA Writer Markdown Annotations (https://github.com/iainc/Markdown-Annotations)
 
 (function () {
@@ -472,43 +472,6 @@
       });
     }
 
-    // ── Paste detection ───────────────────────────────────────────────────────
-    // Any text pasted by the user is marked as AI-authored.
-    // Returns false so MarkEdit's own paste handling (URL→link, etc.) still fires.
-
-    const pasteExt = EditorView.domEventHandlers({
-      paste(event, view) {
-        const pasted = event.clipboardData?.getData('text/plain') || '';
-        if (!pasted) return false;
-
-        // Suppress split logic so the pasted text stays rainbow until
-        // writeAnnotations rewrites the block
-        suppressSplit = true;
-
-        // Capture cursor position synchronously before the paste transaction runs
-        const selFrom = view.state.selection.main.from;
-
-        // Defer annotation write until CM6 has processed the paste transaction
-        setTimeout(() => {
-          suppressSplit = false;
-          try {
-            const { content } = splitDoc(view.state.doc.toString());
-            const pasteEnd = selFrom + pasted.length;
-            if (selFrom >= content.length) return; // pasted into annotation block — ignore
-
-            const gmap  = buildGMap(content);
-            const gFrom = cuToGi(gmap, selFrom);
-            const gTo   = cuToGi(gmap, Math.min(pasteEnd, content.length));
-            if (gFrom < gTo) writeAnnotations(view, [{ loc: gFrom, len: gTo - gFrom }]);
-          } catch (e) {
-            console.error('[ai-rainbow] paste annotation error:', e);
-          }
-        }, 50);
-
-        return false; // do not prevent default paste
-      },
-    });
-
     // ── Paste as AI: Cmd+Shift+V ───────────────────────────────────────────────
     // Explicit command to paste clipboard content and mark it as AI-authored.
 
@@ -694,8 +657,8 @@
 
     // ── Register ──────────────────────────────────────────────────────────────
 
-    MarkEdit.addExtension([viewCapture, decoField, hideField, dimField, pasteExt, pasteAIKm, markKm]);
-    console.log('[ai-rainbow] Loaded: rainbow text · paste detection · ⌘⇧V paste-as-AI · ⌘⇧A toggle AI/Human · stats');
+    MarkEdit.addExtension([viewCapture, decoField, hideField, dimField, pasteAIKm, markKm]);
+    console.log('[ai-rainbow] Loaded: rainbow text · ⌘⇧V paste-as-AI · ⌘⇧A toggle AI/Human · stats');
 
   } catch (err) {
     console.error('[ai-rainbow] Init error:', err);

@@ -11,8 +11,7 @@ iA Writer-style AI authorship highlighting for [MarkEdit](https://github.com/Mar
 
 - **Rainbow gradient** on AI-authored text — static by default, optional shimmer animation
 - **Light & dark mode** — separate color palettes for each
-- **Paste detection** — any pasted text is automatically marked as AI
-- **⌘⇧V** — explicitly paste clipboard as AI
+- **⌘⇧V** — paste clipboard and mark as AI
 - **⌘⇧A** — toggle selected text between AI and Human
 - **Annotation pill** — the annotation block collapses to a tiny faded pill so it stays out of the way; click to reveal
 - **Composition stats** — see your AI vs Human character breakdown at a glance
@@ -40,7 +39,6 @@ The script loads automatically on next launch. No build step needed.
 
 | Action | Result |
 |--------|--------|
-| Paste anything | Automatically marked as AI |
 | **⌘⇧V** | Paste clipboard and mark as AI |
 | Select text → **⌘⇧A** | Toggle selected text AI ↔ Human |
 
