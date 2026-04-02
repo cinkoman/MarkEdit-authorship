@@ -2,7 +2,8 @@
 
 iA Writer-style AI authorship highlighting for [MarkEdit](https://github.com/MarkEdit-app/MarkEdit). AI-written text glows with a rainbow gradient. Human text stays plain. Everything is tracked using the open [Markdown Annotations](https://github.com/iainc/Markdown-Annotations) format, so your files stay portable.
 
-![Static rainbow highlighting in MarkEdit](screenshot.png)
+<img width="720" src="screenshots/editor.png" alt="Rainbow gradient on AI-authored text in MarkEdit">
+<img width="720" src="screenshots/menu.png" alt="AI Authorship submenu in MarkEdit Extensions menu">
 
 ---
 
