@@ -1,3 +1,5 @@
+
+
 # MarkEdit Authorship
 
 iA Writer-style AI authorship highlighting for [MarkEdit](https://github.com/MarkEdit-app/MarkEdit). AI-written text glows with a rainbow gradient. Human text stays plain. Everything is tracked using the open [Markdown Annotations](https://github.com/iainc/Markdown-Annotations) format, so your files stay portable.
@@ -73,7 +75,7 @@ Annotations: 0,241 SHA-256 <hash>
 
 - `&Name:` — AI-authored ranges
 - `@Name:` — Human-authored ranges (supported for reading; manual editing only)
-- Positions are grapheme cluster indices, not byte offsets
+- Range pairs are `start,length` in grapheme cluster indices, not `start,end` or byte offsets
 
 See [`example.md`](example.md) for a working sample.
 
